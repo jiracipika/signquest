@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SignQuest — Learn ASL with your camera</title>
+<link rel="stylesheet" href="css/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤟</text></svg>">
+</head>
+<body>
+<div id="app">
+  <header class="topbar">
+    <div class="brand">🤟 <span>SignQuest</span></div>
+    <nav>
+      <button data-nav="home" class="nav-btn active">Lessons</button>
+      <button data-nav="reference" class="nav-btn">Reference</button>
+      <button data-nav="quiz" class="nav-btn">Quiz</button>
+    </nav>
+    <div class="stats">
+      <span class="stat" id="stat-streak" title="Daily streak">🔥 0</span>
+      <span class="stat" id="stat-xp" title="Total XP">⭐ 0 XP</span>
+    </div>
+  </header>
+  <main id="view"></main>
+</div>
+
+<!-- Camera practice overlay (full-screen modal) -->
+<div id="practice" class="practice hidden">
+  <div class="practice-inner">
+    <div class="practice-head">
+      <button id="practice-close" class="icon-btn" title="Back">←</button>
+      <div class="practice-title" id="practice-title">Sign: A</div>
+      <div class="practice-progress" id="practice-progress">1 / 1</div>
+    </div>
+    <div class="camera-wrap">
+      <video id="cam" autoplay muted playsinline></video>
+      <canvas id="overlay"></canvas>
+      <div class="camera-msg hidden" id="camera-msg"></div>
+    </div>
+    <div class="practice-feedback">
+      <div class="hold-bar"><div id="hold-fill"></div></div>
+      <div class="feedback-row">
+        <span id="feedback-sees" class="sees">Camera starting…</span>
+        <span id="feedback-quality" class="quality"></span>
+      </div>
+      <div class="target-card">
+        <canvas id="target-canvas" width="150" height="170"></canvas>
+        <div class="target-help" id="target-help"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

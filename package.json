@@ -1,0 +1,11 @@
+{
+  "name": "signquest",
+  "version": "0.1.0",
+  "description": "Duolingo-style ASL practice app — camera hand-tracking via MediaPipe, fully client-side",
+  "type": "module",
+  "scripts": {
+    "test": "node tests/classifier.test.mjs",
+    "serve": "python3 -m http.server 8700"
+  },
+  "license": "MIT"
+}
