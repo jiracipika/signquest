@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { canonicalLandmarks, STATIC_LETTERS } from '../js/geometry.js';
-import { classify, extractFeatures, perturb, letterToLandmarks } from '../js/classifier.js';
+import { classify, extractFeatures, perturb, letterToLandmarks, margin, SmoothedClassifier } from '../js/classifier.js';
 
 test('every static letter has a canonical skeleton with 21 finite points', () => {
   for (const L of STATIC_LETTERS) {
@@ -52,4 +52,58 @@ test('mirror invariance: left hand (mirrored x) still classifies', () => {
     if (!r || r.letter !== L) fails.push(`${L}->${r ? r.letter : 'null'}`);
   }
   assert.ok(fails.length <= 2, `mirror fails: ${fails.join(', ')}`);
+});
+
+// ---- smoothing + margin contracts (the app's stability layer) -------------
+
+test('SmoothedClassifier ignores null frames without polluting the window', () => {
+  const s = new SmoothedClassifier(3);
+  assert.equal(s.push(null), null);
+  const r = s.push({ letter: 'A', scores: { A: 1, B: 2 } });
+  assert.equal(r.letter, 'A');
+  assert.equal(r.agreement, 1); // buffer holds only the real frame
+});
+
+test('majority vote flips once the new letter wins the window', () => {
+  const s = new SmoothedClassifier(3);
+  s.push({ letter: 'A', scores: {} });
+  s.push({ letter: 'A', scores: {} });
+  // 2v1 -> A still leads.
+  assert.equal(s.push({ letter: 'B', scores: {} }).letter, 'A');
+  // Window [A,B,B] -> B leads 2v1. Regression: a `best.c` typo made the
+  // vote return the window's OLDEST letter forever (never flipped).
+  assert.equal(s.push({ letter: 'B', scores: {} }).letter, 'B');
+});
+
+test('window is bounded at n frames (old letters evicted)', () => {
+  const s = new SmoothedClassifier(3);
+  for (let i = 0; i < 5; i++) s.push({ letter: 'A', scores: {} });
+  const r = s.push({ letter: 'B', scores: {} });
+  // Buffer is [A,A,B] (n=3 evicts oldest) -> majority A at 2/3 agreement.
+  assert.equal(r.letter, 'A');
+  assert.equal(r.agreement, 2 / 3);
+  s.push({ letter: 'B', scores: {} });
+  s.push({ letter: 'B', scores: {} });
+  assert.equal(s.push({ letter: 'B', scores: {} }).letter, 'B');
+});
+
+test('reset clears the window', () => {
+  const s = new SmoothedClassifier(3);
+  s.push({ letter: 'A', scores: {} });
+  s.reset();
+  const r = s.push({ letter: 'B', scores: {} });
+  assert.equal(r.letter, 'B');
+  assert.equal(r.agreement, 1);
+});
+
+test('margin: confident results gap more than contested ones', () => {
+  const confident = margin({ letter: 'A', scores: { A: 1.0, B: 2.4 } });
+  const contested = margin({ letter: 'B', scores: { A: 1.0, B: 2.0 } });
+  assert.equal(confident, 1.4);
+  assert.equal(contested, 1.0);
+  assert.ok(confident > contested);
+});
+
+test('margin of a null result is 0', () => {
+  assert.equal(margin(null), 0);
 });

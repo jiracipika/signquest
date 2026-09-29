@@ -161,7 +161,11 @@ export class SmoothedClassifier {
     for (const L of this.buf) counts[L] = (counts[L] || 0) + 1;
     let best = null;
     for (const [L, c] of Object.entries(counts)) {
-      if (!best || c > best.c) best = { letter: L, count: c };
+      // BUGFIX (2026-09-29): the comparison read `best.c` — a property the
+      // assignment never writes (`count`) — so best NEVER updated after the
+      // first key and the vote always returned the window's OLDEST letter.
+      // Majority voting now actually votes.
+      if (!best || c > best.count) best = { letter: L, count: c };
     }
     return { letter: best.letter, agreement: best.count / this.buf.length, frame: result };
   }
