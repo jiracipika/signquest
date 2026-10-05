@@ -148,15 +148,43 @@ export function margin(result) {
 }
 
 // Smoothed classifier: majority vote over the last N frames — how the app uses it.
+//
+// Flicker policy (BUGFIX 2026-10-05): a single no-hand frame used to wipe the
+// whole window, so with intermittent detection the vote never accumulated and
+// the "absorbs flicker" claim only held for continuous detection. Now `grace`
+// consecutive no-hand frames are tolerated while HOLDING the current vote;
+// only sustained absence past the grace window resets, so a newly presented
+// letter is never polluted by the old one.
 export class SmoothedClassifier {
-  constructor(n = 9) {
+  constructor(n = 9, grace = 3) {
     this.n = n;
+    this.grace = grace;
     this.buf = [];
+    this._absent = 0;
   }
   push(result) {
+    this._absent = 0; // a detected hand restarts the absence grace counter
     if (!result) return null;
     this.buf.push(result.letter);
     if (this.buf.length > this.n) this.buf.shift();
+    return { ...this._vote(), frame: result };
+  }
+  // A frame where no hand was detected. Within the grace window the current
+  // vote is held (and returned); past it the window resets. Returns null once
+  // the window is (or already was) empty.
+  absent() {
+    if (this.buf.length === 0) return null;
+    if (++this._absent > this.grace) {
+      this.reset();
+      return null;
+    }
+    return this._vote();
+  }
+  reset() {
+    this.buf = [];
+    this._absent = 0;
+  }
+  _vote() {
     const counts = {};
     for (const L of this.buf) counts[L] = (counts[L] || 0) + 1;
     let best = null;
@@ -167,10 +195,7 @@ export class SmoothedClassifier {
       // Majority voting now actually votes.
       if (!best || c > best.count) best = { letter: L, count: c };
     }
-    return { letter: best.letter, agreement: best.count / this.buf.length, frame: result };
-  }
-  reset() {
-    this.buf = [];
+    return { letter: best.letter, agreement: best.count / this.buf.length };
   }
 }
 

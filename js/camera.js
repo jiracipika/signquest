@@ -11,7 +11,9 @@ const MODEL_URL =
 
 export class HandTracker {
   constructor() {
-    this.smoothed = new SmoothedClassifier(9);
+    // n=9 vote window, grace=3: up to 3 consecutive no-hand frames (brief
+    // detection dropouts) hold the accumulated vote instead of wiping it.
+    this.smoothed = new SmoothedClassifier(9, 3);
     this.landmarker = null;
     this.running = false;
     this.onResult = null; // (info) => void
@@ -142,7 +144,11 @@ export class HandTracker {
         };
       }
     } else {
-      this.smoothed.reset();
+      // Flicker policy: a brief detection gap HOLDS the accumulated vote; only
+      // a sustained absence (3 consecutive no-hand frames) resets, so
+      // intermittent detection still builds a stable vote instead of starting
+      // the window over on every dropout.
+      this.smoothed.absent();
     }
     if (this.onResult) this.onResult(info);
   }

@@ -96,6 +96,46 @@ test('reset clears the window', () => {
   assert.equal(r.agreement, 1);
 });
 
+// ---- flicker grace (2026-10-05): no-hand frames no longer wipe the window --
+
+test('a single dropped frame mid-streak keeps the vote', () => {
+  const s = new SmoothedClassifier(3, 1); // grace: 1 tolerated no-hand frame
+  s.push({ letter: 'A', scores: {} });
+  s.push({ letter: 'A', scores: {} });
+  const held = s.absent(); // dropout: vote is held, window untouched
+  assert.deepEqual({ letter: held.letter, agreement: held.agreement }, { letter: 'A', agreement: 1 });
+  const r = s.push({ letter: 'A', scores: {} });
+  assert.equal(r.letter, 'A');
+  assert.equal(r.agreement, 1); // window never lost a letter: still [A,A,A]
+  assert.equal(s.buf.length, 3);
+});
+
+test('sustained absence past the grace window resets, so a new hand starts clean', () => {
+  const s = new SmoothedClassifier(3, 1);
+  for (let i = 0; i < 3; i++) s.push({ letter: 'A', scores: {} });
+  assert.equal(s.absent().letter, 'A'); // 1st no-hand frame: still within grace
+  assert.equal(s.absent(), null);       // 2nd consecutive: grace exceeded -> reset
+  const r = s.push({ letter: 'B', scores: {} });
+  assert.equal(r.letter, 'B');
+  assert.equal(r.agreement, 1); // not diluted by the stale A window
+});
+
+test('a detected hand restarts the absence grace counter', () => {
+  const s = new SmoothedClassifier(3, 1);
+  s.push({ letter: 'A', scores: {} });
+  s.absent();                     // one dropout, held
+  s.push({ letter: 'A', scores: {} }); // hand back -> grace counter restarts
+  const held = s.absent();        // another single dropout: still held
+  assert.equal(held.letter, 'A');
+  assert.equal(s.buf.length, 2);
+});
+
+test('absent on an empty window is a no-op returning null', () => {
+  const s = new SmoothedClassifier(3);
+  assert.equal(s.absent(), null);
+  assert.equal(s.buf.length, 0);
+});
+
 test('margin: confident results gap more than contested ones', () => {
   const confident = margin({ letter: 'A', scores: { A: 1.0, B: 2.4 } });
   const contested = margin({ letter: 'B', scores: { A: 1.0, B: 2.0 } });

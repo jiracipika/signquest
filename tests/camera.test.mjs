@@ -297,7 +297,10 @@ test('hand frame: normalizes to canvas pixels, draws skeleton, smooths, reports'
   assert.equal(seen[1].agreement, 1);
 });
 
-test('no-hand frame clears the canvas, resets the smoother, reports hand:false', () => {
+// THE PIN (2026-10-05): a single no-hand frame used to wipe the vote window,
+// so intermittent detection never accumulated votes. A brief dropout must HOLD
+// the window; only sustained absence resets.
+test('a brief no-hand dropout reports hand:false but HOLDS the vote (flicker grace)', () => {
   const t = new HandTracker();
   const ctx = recordingCtx();
   const overlay = fakeCanvas(ctx);
@@ -307,16 +310,37 @@ test('no-hand frame clears the canvas, resets the smoother, reports hand:false',
 
   t._handleResults({ landmarks: [lmNorm] }, ctx, overlay);
   t._handleResults({ landmarks: [lmNorm] }, ctx, overlay); // window [B,B]
-  t._handleResults({ landmarks: [] }, ctx, overlay);       // hand gone
+  t._handleResults({ landmarks: [] }, ctx, overlay);       // one dropped frame
 
   assert.deepEqual(seen[2], { hand: false });
   assert.equal(ctx._count('clearRect'), 3);
+  assert.equal(t.smoothed.buf.length, 2); // window survived the dropout
+
+  // detection returns: the streak continues on top of the held window
+  t._handleResults({ landmarks: [lmNorm] }, ctx, overlay);
+  assert.equal(seen[3].letter, 'B');
+  assert.equal(seen[3].agreement, 1);
+});
+
+test('sustained absence resets the smoother, so a new hand is not polluted', () => {
+  const t = new HandTracker(); // grace: 3 consecutive no-hand frames
+  const ctx = recordingCtx();
+  const overlay = fakeCanvas(ctx);
+  const seen = [];
+  t.onResult = (info) => seen.push(info);
+  const lmNorm = canonicalLandmarks('B');
+
+  t._handleResults({ landmarks: [lmNorm] }, ctx, overlay);
+  for (let i = 0; i < 3; i++) t._handleResults({ landmarks: [] }, ctx, overlay); // within grace
+  assert.equal(t.smoothed.buf.length, 1);
+  t._handleResults({ landmarks: [] }, ctx, overlay); // 4th consecutive: past grace
+
   assert.equal(t.smoothed.buf.length, 0); // window was reset
 
   // a different letter right after is NOT diluted by the stale B window
   t._handleResults({ landmarks: [canonicalLandmarks('C')] }, ctx, overlay);
-  assert.equal(seen[3].letter, 'C');
-  assert.equal(seen[3].agreement, 1);
+  assert.equal(seen[5].letter, 'C');
+  assert.equal(seen[5].agreement, 1);
 });
 
 test('_handleResults works without an onResult listener', () => {
