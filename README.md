@@ -38,5 +38,8 @@ feature space. A 9-frame majority-vote smoother absorbs flicker.
 
 ## Tests
 
-    npm test    # 5 suites: canonical classification, perturbation robustness,
-                # mirror invariance, degenerate-input rejection
+    npm test    # node:test suites: classifier (canonical + perturbation +
+                # mirror + smoothing contracts), camera decision loop
+                # (lifecycle, fallback, per-frame handling), quiz state
+                # machine, render fit logic. The webcam itself is hardware —
+                # the logic around it is what's under test.
