@@ -269,6 +269,42 @@ test('a second detect failure reports an error and keeps the loop alive', async 
   assert.equal(raf.pending, 1); // error is reported, loop continues
 });
 
+// THE PIN (2026-10-05): _fellBackToCpu used to survive stop(), so one
+// transient GPU failure downgraded every future session until page reload.
+// The latch must be per-session: after stop(), the next start retries GPU.
+test('a new session retries GPU after a previous session fell back to CPU', async () => {
+  let session = 0;
+  const t = new TestTracker(null);
+  t._createLandmarker = async (delegate) => {
+    t._createCalls.push(delegate);
+    if (session === 0) return fakeLandmarker(() => { throw new Error('GPU kernel failed'); });
+    return fakeLandmarker(() => ({ landmarks: [] })); // session 1: GPU works again
+  };
+  const cpuLm = fakeLandmarker(() => ({ landmarks: [] }));
+  t._buildCpuLandmarker = async () => cpuLm; // stub the CDN rebuild itself
+  const raf = fakeRaf();
+  installNavigator(() => fakeStream().stream);
+  const video = fakeVideo();
+  const overlay = fakeCanvas(recordingCtx());
+
+  // Session 1: GPU detect throws once -> detect-time fallback latches.
+  await t.start(video, overlay);
+  raf.pump();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(t._fellBackToCpu, true);
+
+  t.stop(video);
+  assert.equal(t._fellBackToCpu, false); // <-- the fix: latch cleared on stop
+
+  // Session 2: a working GPU landmarker is created AND used.
+  session = 1;
+  await t.start(video, overlay);
+  raf.pump();
+  assert.deepEqual(t._createCalls, ['GPU', 'GPU']); // no CPU create in session 2
+  assert.equal(t._fellBackToCpu, false);            // no fallback triggered
+  assert.notEqual(t.landmarker, cpuLm);             // detecting on the GPU landmarker
+});
+
 // ---- _handleResults: the per-frame decision ---------------------------------
 
 test('hand frame: normalizes to canvas pixels, draws skeleton, smooths, reports', () => {

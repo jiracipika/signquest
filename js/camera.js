@@ -20,6 +20,7 @@ export class HandTracker {
     this.onError = null;  // (msg) => void
     this._raf = null;
     this._lastTs = -1;
+    this._fellBackToCpu = false; // detect-time GPU failure this session (reset by stop)
   }
 
   async start(videoEl, overlayCanvas) {
@@ -164,6 +165,10 @@ export class HandTracker {
       try { this.landmarker.close(); } catch {}
       this.landmarker = null;
     }
+    // BUGFIX (2026-10-05): _fellBackToCpu used to survive stop(), so one
+    // transient GPU failure downgraded every future session until page reload.
+    // The latch is per-session: the next start() must retry GPU.
+    this._fellBackToCpu = false;
     this.smoothed.reset();
   }
 }
