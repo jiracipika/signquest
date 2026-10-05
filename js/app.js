@@ -4,6 +4,7 @@
 import { STATIC_LETTERS } from './geometry.js';
 import { renderLetterTarget } from './render.js';
 import { HandTracker } from './camera.js';
+import { pickQuizLetters, newQuiz, answerQuiz } from './quiz.js';
 
 const STORE_KEY = 'signquest-progress-v1';
 
@@ -163,7 +164,7 @@ function renderReference() {
 }
 
 // ---- quiz ----
-const QUIZ_LEN = 10;
+// Flow logic lives in js/quiz.js (pure, unit-tested); this layer is DOM only.
 let quiz = null;
 function renderQuiz() {
   document.title = 'SignQuest — Quiz';
@@ -173,21 +174,16 @@ function renderQuiz() {
   drawQuiz();
 }
 function makeQuiz() {
-  const pool = STATIC_LETTERS.filter((L) => letterStars(L) > 0);
-  const letters = (pool.length >= 4 ? pool : ['A', 'B', 'C', 'L', 'V', 'Y'])
-    .slice()
-    .sort(() => Math.random() - 0.5)
-    .slice(0, QUIZ_LEN);
-  return { letters, idx: 0, correct: 0, done: false, phase: 'question', lastAnswer: null };
+  return newQuiz(pickQuizLetters(STATIC_LETTERS.filter((L) => letterStars(L) > 0)));
 }
 function drawQuiz() {
   const q = quiz;
   if (q.done) {
-    const pct = Math.round((q.correct / QUIZ_LEN) * 100);
+    const pct = Math.round((q.correct / q.len) * 100);
     view.innerHTML = `
       <div class="quiz-card">
         <div class="quiz-big">${pct >= 80 ? '🏆' : pct >= 50 ? '👍' : '📚'}</div>
-        <h2>${q.correct} / ${QUIZ_LEN} correct (${pct}%)</h2>
+        <h2>${q.correct} / ${q.len} correct (${pct}%)</h2>
         <p style="color:var(--text-dim);margin-top:6px">Best: ${state.quizBest}%</p>
         <button class="quiz-btn" id="quiz-again">Play again</button>
       </div>`;
@@ -197,29 +193,22 @@ function drawQuiz() {
   const L = q.letters[q.idx];
   view.innerHTML = `
     <div class="quiz-card">
-      <div style="color:var(--text-dim)">Question ${q.idx + 1} of ${QUIZ_LEN}</div>
+      <div style="color:var(--text-dim)">Question ${q.idx + 1} of ${q.len}</div>
       <div class="quiz-big">${L}</div>
       <p style="color:var(--text-dim)">Show this letter to the camera</p>
       <div class="quiz-result" id="quiz-result">${q.lastAnswer === null ? '' :
         q.lastAnswer ? '✅ Correct!' : `❌ That looked like ${q.seenLetter}`}</div>
       <button class="quiz-btn" id="quiz-cam">📷 Check with camera</button>
       <button class="quiz-btn secondary" id="quiz-skip">Skip</button>
-      <div class="quiz-timer"><div id="quiz-timer-fill" style="width:${(1 - q.idx / QUIZ_LEN) * 100}"></div></div>
+      <div class="quiz-timer"><div id="quiz-timer-fill" style="width:${(1 - q.idx / q.len) * 100}%"></div></div>
     </div>`;
   document.getElementById('quiz-skip').onclick = () => { advanceQuiz(false, null); };
   document.getElementById('quiz-cam').onclick = () =>
     startPractice([L], { onHold: (ok) => advanceQuiz(ok, ok ? L : lastSeenLetter) });
 }
 function advanceQuiz(ok, seen) {
-  quiz.lastAnswer = ok;
-  quiz.seenLetter = seen;
-  if (ok) quiz.correct++;
-  quiz.idx++;
-  if (quiz.idx >= QUIZ_LEN) {
-    quiz.done = true;
-    const pct = Math.round((quiz.correct / QUIZ_LEN) * 100);
-    if (pct > state.quizBest) { state.quizBest = pct; state.xp += 25; saveState(); }
-  }
+  const res = answerQuiz(quiz, ok, seen);
+  if (res.done && res.pct > state.quizBest) { state.quizBest = res.pct; state.xp += 25; saveState(); }
   drawQuiz();
 }
 
