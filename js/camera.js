@@ -22,30 +22,13 @@ export class HandTracker {
 
   async start(videoEl, overlayCanvas) {
     if (this.running) return;
-    // 1) Load the tasks-vision ESM bundle.
-    let vision;
+    // 1) + 2) Load tasks-vision and create the landmarker (downloads the model
+    // on first use). GPU delegate is faster; fall back to CPU automatically
+    // (older Macs, blocked WebGL, VMs).
     try {
-      vision = await import(/* @vite-ignore */ `${VISION_URL}/vision_bundle.mjs`);
+      this.landmarker = await this._createLandmarker('GPU');
     } catch (e) {
-      throw new Error('Could not load the hand-tracking library (check your internet connection).');
-    }
-    // 2) Create the landmarker (downloads the model on first use).
-    // GPU delegate is faster; fall back to CPU automatically (older Macs,
-    // blocked WebGL, VMs).
-    const fileset = await vision.FilesetResolver.forVisionTasks(`${VISION_URL}/wasm`);
-    const makeLandmarker = (delegate) =>
-      vision.HandLandmarker.createFromOptions(fileset, {
-        baseOptions: { modelAssetPath: MODEL_URL, delegate },
-        numHands: 1,
-        runningMode: 'VIDEO',
-        minHandDetectionConfidence: 0.5,
-        minHandPresenceConfidence: 0.5,
-        minTrackingConfidence: 0.5,
-      });
-    try {
-      this.landmarker = await makeLandmarker('GPU');
-    } catch (e) {
-      this.landmarker = await makeLandmarker('CPU');
+      this.landmarker = await this._createLandmarker('CPU');
     }
 
     // 3) Camera.
@@ -76,7 +59,14 @@ export class HandTracker {
           // GPU delegate can fail at detect-time on some machines → once.
           if (!this._fellBackToCpu) {
             this._fellBackToCpu = true;
-            this._restartWithCpu(videoEl, overlayCanvas);
+            // BUGFIX (2026-10-05): this used to just `return`, so after the
+            // first detect-time failure the rAF loop was never scheduled again
+            // and detection froze permanently — even though the CPU landmarker
+            // finished building. Rebuild on CPU, then RESUME the loop unless
+            // the tracker was stopped in the meantime.
+            this._restartWithCpu().then(() => {
+              if (this.running) this._raf = requestAnimationFrame(loop);
+            });
             return;
           }
           if (this.onError) this.onError('detection error: ' + e.message);
@@ -87,9 +77,32 @@ export class HandTracker {
     this._raf = requestAnimationFrame(loop);
   }
 
-  _restartWithCpu(videoEl, overlayCanvas) {
+  // Load the tasks-vision ESM bundle + build a HandLandmarker for `delegate`
+  // ('GPU' or 'CPU'). Extracted so tests can stub model/wasm wiring.
+  async _createLandmarker(delegate) {
+    let vision;
+    try {
+      vision = await import(/* @vite-ignore */ `${VISION_URL}/vision_bundle.mjs`);
+    } catch (e) {
+      throw new Error('Could not load the hand-tracking library (check your internet connection).');
+    }
+    const fileset = await vision.FilesetResolver.forVisionTasks(`${VISION_URL}/wasm`);
+    return vision.HandLandmarker.createFromOptions(fileset, {
+      baseOptions: { modelAssetPath: MODEL_URL, delegate },
+      numHands: 1,
+      runningMode: 'VIDEO',
+      minHandDetectionConfidence: 0.5,
+      minHandPresenceConfidence: 0.5,
+      minTrackingConfidence: 0.5,
+    });
+  }
+
+  _restartWithCpu() {
     // Async swap: rebuild landmarker with CPU delegate, keep camera running.
-    (async () => {
+    // Returns a promise that settles once the swap finished (failures surface
+    // via onError + running=false, so the promise itself never rejects and the
+    // loop-resume .then() in start() can simply check this.running).
+    return (async () => {
       try {
         const vision = await import(/* @vite-ignore */ `${VISION_URL}/vision_bundle.mjs`);
         const fileset = await vision.FilesetResolver.forVisionTasks(`${VISION_URL}/wasm`);
