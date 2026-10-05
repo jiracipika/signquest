@@ -218,6 +218,8 @@ let tracker = null;
 let practice = null;
 
 function startPractice(letters, opts = {}) {
+  lastFrameTs = 0; // fresh session: first frame uses the default dt instead of
+                   // a stale gap carried over from the previous session
   practice = {
     letters,
     idx: 0,
