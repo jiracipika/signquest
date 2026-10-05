@@ -225,9 +225,10 @@ test('after a detect-time GPU failure the loop resumes on the CPU landmarker', a
   const overlay = fakeCanvas(recordingCtx());
   await t.start(video, overlay);
   t.onResult = (info) => seen.push(info);
-  // Stub only the CDN rebuild: pretend the CPU landmarker finished building.
+  // Stub only the CDN rebuild itself: pretend the CPU landmarker finished
+  // building. The real _restartWithCpu (close-old -> adopt -> resume) runs.
   const cpuLm = fakeLandmarker(() => ({ landmarks: [canonicalLandmarks('A')] }));
-  t._restartWithCpu = async () => { t.landmarker = cpuLm; };
+  t._buildCpuLandmarker = async () => cpuLm;
 
   raf.pump(); // GPU frame: detect throws -> fallback path
   assert.equal(gpuAttempts, 1);
@@ -238,6 +239,34 @@ test('after a detect-time GPU failure the loop resumes on the CPU landmarker', a
   assert.equal(seen.length, 1);
   assert.equal(seen[0].hand, true);
   assert.equal(seen[0].letter, 'A'); // detection actually works again
+});
+
+// THE PIN (2026-10-05): stop() racing an in-flight CPU rebuild used to adopt
+// the freshly built landmarker — orphaning it outside stop()'s teardown, where
+// nobody ever closes it. The rebuild's epoch guard must release it instead.
+test('stop during a pending CPU rebuild releases the rebuilt landmarker and resumes nothing', async () => {
+  const gpuLm = fakeLandmarker(() => { throw new Error('GPU kernel failed'); });
+  const t = new TestTracker(gpuLm);
+  const raf = fakeRaf();
+  installNavigator(() => fakeStream().stream);
+  await t.start(fakeVideo(), fakeCanvas(recordingCtx()));
+
+  let release;
+  const rebuilt = fakeLandmarker(() => ({ landmarks: [] }));
+  t._buildCpuLandmarker = () => new Promise((resolve) => { release = () => resolve(rebuilt); });
+
+  raf.pump(); // GPU detect throws -> the real _restartWithCpu starts; rebuild pending
+  assert.equal(typeof release, 'function');
+
+  t.stop(); // user closes practice while the CPU rebuild is still in flight
+  assert.equal(t.landmarker, null); // stop released the GPU landmarker
+
+  release(); // the rebuild only finishes AFTER stop()
+  await new Promise((r) => setImmediate(r));
+
+  assert.equal(rebuilt.closedCount, 1); // orphaned landmarker closed, not leaked
+  assert.equal(t.landmarker, null);     // ...and never adopted
+  assert.equal(raf.pending, 0);         // no detection loop resumed after stop
 });
 
 test('CPU rebuild failure reports an error and does not resume the loop', async () => {

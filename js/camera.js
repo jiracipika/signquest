@@ -21,6 +21,7 @@ export class HandTracker {
     this._raf = null;
     this._lastTs = -1;
     this._fellBackToCpu = false; // detect-time GPU failure this session (reset by stop)
+    this._epoch = 0;             // bumped by stop(); guards the async CPU rebuild
   }
 
   async start(videoEl, overlayCanvas) {
@@ -105,23 +106,35 @@ export class HandTracker {
     // Returns a promise that settles once the swap finished (failures surface
     // via onError + running=false, so the promise itself never rejects and the
     // loop-resume .then() in start() can simply check this.running).
-    return (async () => {
-      try {
-        const vision = await import(/* @vite-ignore */ `${VISION_URL}/vision_bundle.mjs`);
-        const fileset = await vision.FilesetResolver.forVisionTasks(`${VISION_URL}/wasm`);
-        if (this.landmarker) {
+    const epoch = this._epoch; // BUGFIX (2026-10-05): if stop() runs while the
+    return (async () => {      // rebuild is in flight, the fresh CPU landmarker
+      try {                    // must be released, not adopted — otherwise it
+        if (this.landmarker) { // leaks and stop()'s teardown is bypassed.
           try { this.landmarker.close(); } catch {}
         }
-        this.landmarker = await vision.HandLandmarker.createFromOptions(fileset, {
-          baseOptions: { modelAssetPath: MODEL_URL, delegate: 'CPU' },
-          numHands: 1,
-          runningMode: 'VIDEO',
-        });
+        const next = await this._buildCpuLandmarker();
+        if (epoch !== this._epoch) {
+          try { next.close(); } catch {}
+          return;
+        }
+        this.landmarker = next;
       } catch (e) {
         if (this.onError) this.onError('CPU fallback failed: ' + e.message);
         this.running = false;
       }
     })();
+  }
+
+  // Build (but do not adopt) a CPU-delegate HandLandmarker. Isolated so tests
+  // can stub the CDN/model wiring the same way as _createLandmarker.
+  async _buildCpuLandmarker() {
+    const vision = await import(/* @vite-ignore */ `${VISION_URL}/vision_bundle.mjs`);
+    const fileset = await vision.FilesetResolver.forVisionTasks(`${VISION_URL}/wasm`);
+    return vision.HandLandmarker.createFromOptions(fileset, {
+      baseOptions: { modelAssetPath: MODEL_URL, delegate: 'CPU' },
+      numHands: 1,
+      runningMode: 'VIDEO',
+    });
   }
 
   _handleResults(res, ctx, overlayCanvas) {
@@ -156,6 +169,7 @@ export class HandTracker {
 
   stop(videoEl) {
     this.running = false;
+    this._epoch += 1; // invalidate any in-flight CPU rebuild (see _restartWithCpu)
     if (this._raf) cancelAnimationFrame(this._raf);
     if (videoEl && videoEl.srcObject) {
       for (const t of videoEl.srcObject.getTracks()) t.stop();
