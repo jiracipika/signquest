@@ -403,8 +403,10 @@ test('sustained absence resets the smoother, so a new hand is not polluted', () 
   assert.equal(t.smoothed.buf.length, 0); // window was reset
 
   // a different letter right after is NOT diluted by the stale B window
-  t._handleResults({ landmarks: [canonicalLandmarks('C')] }, ctx, overlay);
-  assert.equal(seen[5].letter, 'C');
+  // (L: a canonical skeleton that still classifies as itself under the
+  // dataset-derived prototypes — see classifier.test.mjs)
+  t._handleResults({ landmarks: [canonicalLandmarks('L')] }, ctx, overlay);
+  assert.equal(seen[5].letter, 'L');
   assert.equal(seen[5].agreement, 1);
 });
 

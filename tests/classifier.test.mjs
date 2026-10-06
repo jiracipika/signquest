@@ -1,7 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { canonicalLandmarks, STATIC_LETTERS } from '../js/geometry.js';
 import { classify, extractFeatures, perturb, letterToLandmarks, margin, SmoothedClassifier } from '../js/classifier.js';
+
+// Real-hand fixtures: 12 samples per letter (26 letters) in the canonical
+// frame, extracted with MediaPipe from the Marxulia/asl_sign_languages_alphabets_v03
+// dataset — the same extraction the prototypes were built from. J/Z are static
+// photos of movement letters (shape ~ I / D); their static rows exercise the
+// confusion but their RECOGNITION is motion.js's job, so the accuracy floors
+// below only score the 24 static letters.
+const FIXTURES = JSON.parse(
+  readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'asl-letter-fixtures-v1.json'), 'utf8')
+);
+const toPts = (lm) => lm.map((p) => ({ x: p[0], y: p[1], z: p[2] }));
 
 test('every static letter has a canonical skeleton with 21 finite points', () => {
   for (const L of STATIC_LETTERS) {
@@ -12,46 +26,78 @@ test('every static letter has a canonical skeleton with 21 finite points', () =>
   }
 });
 
-test('classifier recognizes all 24 canonical letters (zero-noise fixtures)', () => {
-  const fails = [];
-  for (const L of STATIC_LETTERS) {
-    const lm = canonicalLandmarks(L);
-    const r = classify(lm);
-    if (!r || r.letter !== L) fails.push(`${L}->${r ? r.letter : 'null'}`);
-  }
-  assert.deepStrictEqual(fails, [], `canonical misclassifications: ${fails.join(', ')}`);
-});
-
-test('classifier robust to in-plane rotation + scale + jitter', () => {
-  const fails = [];
-  for (const L of STATIC_LETTERS) {
-    for (const [seed, angle, scale, jitter] of [
-      [1, 0.3, 1.4, 0.01], [2, -0.5, 0.7, 0.01], [3, 1.2, 1.0, 0.02], [4, -2.0, 0.9, 0.015],
-    ]) {
-      const lm = perturb(canonicalLandmarks(L), { angle, scale, jitter, seed });
-      const r = classify(lm);
-      if (!r || r.letter !== L) fails.push(`${L} (seed ${seed}) -> ${r ? r.letter : 'null'}`);
-    }
-  }
-  // allow a small number of hard-case misses under heavy jitter, but canonical
-  // (jitter=0) cases must never fail
-  assert.ok(fails.length <= 4, `too many perturbed misclassifications: ${fails.join(', ')}`);
-});
-
 test('extractFeatures rejects garbage input', () => {
   assert.equal(extractFeatures(new Array(21).fill(null)), null);
   const flat = new Array(21).fill({ x: 0.5, y: 0.5, z: 0 }); // collinear → no palm normal
   assert.equal(extractFeatures(flat), null);
 });
 
-test('mirror invariance: left hand (mirrored x) still classifies', () => {
-  const fails = [];
-  for (const L of STATIC_LETTERS) {
-    const lm = canonicalLandmarks(L).map((p) => ({ x: -p.x, y: p.y, z: p.z }));
-    const r = classify(lm);
-    if (!r || r.letter !== L) fails.push(`${L}->${r ? r.letter : 'null'}`);
+// THE PIN (2026-10-05, dataset grounding): prototypes are now k-means
+// centroids over 3,120 real landmark samples. The old hand-authored prototypes
+// scored 40.6% on that data; the dataset prototypes score ~85% held-out
+// (93.4% train-through). This floor pins the regression line on the committed
+// real-hand fixtures (a training subset, so the bar sits above held-out).
+test('classifier recognizes real-hand fixtures (dataset-derived prototypes)', () => {
+  let ok = 0;
+  let total = 0;
+  const conf = {};
+  for (const [L, arrs] of Object.entries(FIXTURES)) {
+    if (L === 'J' || L === 'Z') continue;
+    for (const lm of arrs) {
+      total++;
+      const r = classify(toPts(lm));
+      if (r && r.letter === L) ok++;
+      else (conf[L] ||= []).push(r ? r.letter : 'null');
+    }
   }
-  assert.ok(fails.length <= 2, `mirror fails: ${fails.join(', ')}`);
+  const pct = ok / total;
+  assert.ok(
+    pct >= 0.88,
+    `real-fixture accuracy ${(pct * 100).toFixed(1)}% below the 88% floor (${ok}/${total}): ${JSON.stringify(conf)}`
+  );
+});
+
+test('classifier robust to in-plane rotation + scale + jitter on real hands', () => {
+  const fails = [];
+  for (const [L, arrs] of Object.entries(FIXTURES)) {
+    if (L === 'J' || L === 'Z') continue;
+    for (const lm of arrs) {
+      for (const [seed, angle, scale, jitter] of [
+        [1, 0.3, 1.4, 0.01], [2, -0.5, 0.7, 0.01], [3, 1.2, 1.0, 0.02], [4, -2.0, 0.9, 0.015],
+      ]) {
+        const r = classify(perturb(toPts(lm), { angle, scale, jitter, seed }));
+        if (!r || r.letter !== L) fails.push(`${L} (seed ${seed}) -> ${r ? r.letter : 'null'}`);
+      }
+    }
+  }
+  // measured 99/1152 misclassifications under this stress; the floor allows
+  // the same rate plus headroom (≈10%)
+  assert.ok(fails.length <= 120, `too many perturbed misclassifications (${fails.length}/1152): ${fails.slice(0, 10).join(', ')}...`);
+});
+
+test('mirror invariance: a mirrored left-hand image classifies as the same letter', () => {
+  // Property (not accuracy): extractFeatures canonicalizes chirality, so an
+  // image-level x-mirror of any real sample must classify identically. MediaPipe's
+  // relative-depth channel is not a consistent 3D mirror, so agreement is
+  // measured, not perfect: 91.0% on these fixtures (z-sensitive curved letters
+  // C/O carry most of the disagreement).
+  let agree = 0;
+  let total = 0;
+  const fails = [];
+  for (const [L, arrs] of Object.entries(FIXTURES)) {
+    if (L === 'J' || L === 'Z') continue;
+    for (const lm of arrs) {
+      total++;
+      const a = classify(toPts(lm));
+      const b = classify(toPts(lm).map((p) => ({ x: -p.x, y: p.y, z: p.z })));
+      if (a && b && a.letter === b.letter) agree++;
+      else fails.push(`${L}:${a ? a.letter : 'null'}/${b ? b.letter : 'null'}`);
+    }
+  }
+  assert.ok(
+    agree / total >= 0.87,
+    `mirror agreement ${(100 * agree / total).toFixed(1)}% below the 87% floor: ${fails.slice(0, 10).join(', ')}`
+  );
 });
 
 // ---- smoothing + margin contracts (the app's stability layer) -------------

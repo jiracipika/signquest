@@ -8,8 +8,8 @@ import { canonicalLandmarks, STATIC_LETTERS } from '../js/geometry.js';
 
 function recordingCanvas(w = 140, h = 150) {
   const calls = [];
-  const ctx = { lineWidth: 0, strokeStyle: '', fillStyle: '', lineCap: '' };
-  for (const m of ['clearRect', 'fillRect', 'beginPath', 'moveTo', 'lineTo', 'stroke', 'arc', 'fill']) {
+  const ctx = { lineWidth: 0, strokeStyle: '', fillStyle: '', lineCap: '', lineJoin: '' };
+  for (const m of ['clearRect', 'fillRect', 'beginPath', 'moveTo', 'lineTo', 'stroke', 'arc', 'fill', 'closePath', 'setLineDash']) {
     ctx[m] = (...args) => calls.push({ name: m, args });
   }
   ctx._calls = calls;
@@ -22,10 +22,23 @@ const BONES = 21;
 
 test('unknown letter draws nothing (graceful no-op)', () => {
   const c = recordingCanvas();
-  renderLetterTarget(c, 'Z'); // motion letter, not in the pose set
+  renderLetterTarget(c, '1'); // not a static pose and not a motion stroke
   assert.equal(c.ctx._count('moveTo'), 0);
   assert.equal(c.ctx._count('lineTo'), 0);
   assert.equal(c.ctx._count('arc'), 0);
+});
+
+// Movement letters draw their traced stroke as the target: dashed polyline,
+// green start dot, direction arrowhead (2026-10-05 — J/Z became traceable).
+test('motion letters draw their stroke glyph, not a skeleton', () => {
+  for (const L of ['J', 'Z']) {
+    const c = recordingCanvas();
+    renderLetterTarget(c, L);
+    assert.ok(c.ctx._count('lineTo') >= 3, `${L}: stroke polyline not drawn`);
+    assert.ok(c.ctx._count('setLineDash') >= 2, `${L}: dashed styling missing`);
+    assert.equal(c.ctx._count('arc'), 1, `${L}: expected exactly the start dot`);
+    assert.equal(c.ctx._count('closePath'), 1, `${L}: arrowhead missing`);
+  }
 });
 
 test('every letter skeleton is drawn and fits inside its canvas', () => {

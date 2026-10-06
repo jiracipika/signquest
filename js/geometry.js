@@ -5,8 +5,25 @@
 //   - the classifier tests (deterministic fixtures for all 24 static letters)
 //
 // Coordinate system: y is UP (like math, unlike video). x+ points toward the
-// pinky side of the RIGHT hand as seen un-mirrored. analyzeHand() normalizes
-// video landmarks into this space (y flip + handedness flip).
+// pinky side of the RIGHT hand as seen un-mirrored. extractFeatures()
+// (classifier.js) normalizes video landmarks into this frame internally
+// (palm-axis rotation + scale + chirality canonicalization).
+
+// ---- movement letters --------------------------------------------------------
+// J and Z are signed by TRACING the glyph with a fingertip, so they have no
+// static pose. Strokes below are in SIGNER view (what the reader sees),
+// unit square, y-down. js/motion.js mirrors them into camera space for
+// matching; render.js draws them verbatim as the practice target.
+export const MOTION_LETTERS = ['J', 'Z'];
+export const MOTION_STROKES = {
+  J: [
+    [0.62, 0.10], [0.62, 0.45], [0.62, 0.70], [0.58, 0.84], [0.46, 0.90],
+    [0.34, 0.86], [0.28, 0.74], [0.30, 0.62],
+  ],
+  Z: [
+    [0.25, 0.18], [0.75, 0.18], [0.30, 0.82], [0.80, 0.82],
+  ],
+};
 
 const deg = (r) => r;
 const dir = (a) => [Math.sin(a), Math.cos(a)]; // angle measured from +y, rotating toward +x

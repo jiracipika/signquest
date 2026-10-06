@@ -1,7 +1,6 @@
 // Canvas rendering: hand skeleton overlays + idealized letter target skeletons.
 // The target renderer is the "teach" visual — user mimics the drawn shape.
-
-import { canonicalLandmarks } from './geometry.js';
+import { canonicalLandmarks, MOTION_STROKES } from './geometry.js';
 
 const CONNECTIONS = [
   [0, 1], [1, 2], [2, 3], [3, 4],           // thumb
@@ -30,12 +29,48 @@ export function drawHandSkeleton(ctx, lm, { color = '#7c5cff', ok = false } = {}
 }
 
 // Draw the idealized letter skeleton into a canvas (used for targets/reference).
+// Movement letters (J/Z) have no skeleton — their glyph IS the stroke, so we
+// draw the traced path with a direction arrowhead instead.
 export function renderLetterTarget(canvas, letter, { color = '#9d85ff' } = {}) {
   const ctx = canvas.getContext('2d');
   const W = canvas.width, H = canvas.height;
   ctx.clearRect(0, 0, W, H);
   ctx.fillStyle = 'rgba(255,255,255,0.04)';
   ctx.fillRect(0, 0, W, H);
+
+  const stroke = MOTION_STROKES[letter];
+  if (stroke) {
+    const pad = 28;
+    const scale = Math.min((W - pad * 2), (H - pad * 2));
+    const offX = (W - scale) / 2, offY = (H - scale) / 2;
+    const pts = stroke.map(([x, y]) => [x * scale + offX, y * scale + offY]);
+    ctx.lineWidth = 9;
+    ctx.strokeStyle = color;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.setLineDash([14, 10]);
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for (const [x, y] of pts.slice(1)) ctx.lineTo(x, y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    // start dot + direction arrowhead on the final segment
+    ctx.fillStyle = '#2ecc71';
+    ctx.beginPath();
+    ctx.arc(pts[0][0], pts[0][1], 6, 0, Math.PI * 2);
+    ctx.fill();
+    const [ax, ay] = pts[pts.length - 2];
+    const [bx, by] = pts[pts.length - 1];
+    const ang = Math.atan2(by - ay, bx - ax);
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(bx, by);
+    ctx.lineTo(bx - 12 * Math.cos(ang - 0.45), by - 12 * Math.sin(ang - 0.45));
+    ctx.lineTo(bx - 12 * Math.cos(ang + 0.45), by - 12 * Math.sin(ang + 0.45));
+    ctx.closePath();
+    ctx.fill();
+    return;
+  }
 
   // Fit: geometry y is up; canvas y is down. Normalize by bounds.
   const lm = canonicalLandmarks(letter);

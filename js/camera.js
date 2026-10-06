@@ -134,6 +134,10 @@ export class HandTracker {
       baseOptions: { modelAssetPath: MODEL_URL, delegate: 'CPU' },
       numHands: 1,
       runningMode: 'VIDEO',
+      // kept identical to the GPU path — the two option sets must not drift
+      minHandDetectionConfidence: 0.5,
+      minHandPresenceConfidence: 0.5,
+      minTrackingConfidence: 0.5,
     });
   }
 
@@ -146,7 +150,13 @@ export class HandTracker {
       const lmNorm = lms[0];
       const lm = lmNorm.map((p) => ({ x: p.x * W, y: p.y * H, z: (p.z || 0) * W }));
       drawHandSkeleton(ctx, lm);
-      const result = classify(lm);
+      // MediaPipe normalizes x by the frame width and y by the height — on a
+      // non-square feed that STRETCHES the hand (4:3 => 33% wider geometry).
+      // Classify on square-space coordinates (both axes by W) so the palm
+      // frame matches true hand proportions; the drawn skeleton keeps the
+      // real aspect so it stays aligned with the video.
+      const sq = lmNorm.map((p) => ({ x: p.x * W, y: p.y * W, z: (p.z || 0) * W }));
+      const result = classify(sq);
       if (result) {
         const sm = this.smoothed.push(result);
         info = {
@@ -155,6 +165,7 @@ export class HandTracker {
           agreement: sm.agreement,
           distance: result.distance,
           margin: margin(result),
+          landmarks: sq, // square-space coords for the movement-letter tracker
         };
       }
     } else {

@@ -1,9 +1,16 @@
-// Deterministic ASL static-letter classifier over MediaPipe-style 21-landmark hands.
+// Deterministic ASL static-letter classifier over MediaPipe-style 21-landmark
+// hands.
 //
 // Approach: scale/rotation/translation/handedness-INVARIANT features + nearest
-// prototype matching against canonical (idealized) skeletons. No training data,
-// fully deterministic, explainable. Runs identically in Node tests and browser.
-import { canonicalLandmarks, STATIC_LETTERS } from './geometry.js';
+// prototype matching. DATASET-GROUNDED (2026-10-05): prototypes are k-means
+// centroids (6/letter) over 3,120 real landmark samples extracted with the
+// same MediaPipe hand_landmarker model from the Hugging Face dataset
+// Marxulia/asl_sign_languages_alphabets_v03, whitened per feature dim.
+// Held-out accuracy 85.2% vs 40.6% for the previous hand-authored canonical
+// prototypes. Regenerate with scripts/build-prototypes.mjs. J and Z are
+// movement letters — they are recognized by js/motion.js, not here.
+import PROTOTYPES, { SCALE } from './prototypes.js';
+import { canonicalLandmarks } from './geometry.js';
 
 const FINGERS = ['index', 'middle', 'ring', 'pinky'];
 const FINGER_CHAINS = {
@@ -13,6 +20,8 @@ const FINGER_CHAINS = {
   pinky: [17, 18, 19, 20],
 };
 const THUMB_CHAIN = [1, 2, 3, 4];
+// Reference MCP for the metacarpal direction of each finger's MCP curl term.
+const MCP_NEIGHBOR = { index: 9, middle: 13, ring: 17, pinky: 13 };
 
 const sub = (a, b) => [a.x - b.x, a.y - b.y, a.z - b.z];
 const norm = (v) => Math.hypot(v[0], v[1], v[2]);
@@ -36,11 +45,22 @@ function jointAngle(a, b, c) {
   return Math.acos(Math.min(1, Math.max(-1, dot3(u, v) / (nu * nv))));
 }
 
-// Total flexion of a 4-point chain: sum of (PI - interior angle) at its 3 joints.
+// Total flexion of a 4-point chain: sum of (PI - interior angle) at its PIP
+// and DIP joints. MCP flexion has its own term (mcpCurl below) because the
+// chain's first segment starts at the MCP — there is no proximal segment
+// inside the chain to form that angle.
 function chainCurl(chain, lm) {
   let s = 0;
   for (let i = 1; i <= 2; i++) s += Math.PI - jointAngle(lm[chain[i - 1]], lm[chain[i]], lm[chain[i + 1]]);
   return s;
+}
+
+// Flexion at the MCP: angle between the metacarpal direction (approximated by
+// the neighbor-MCP direction) and the MCP->PIP segment. Separates knuckles-up
+// postures (B, F) from folded-knuckle postures (M, N, E) far better than tip
+// position alone.
+function mcpCurl(mcp, neighborMcp, pip, lm) {
+  return Math.PI - jointAngle(lm[neighborMcp], lm[mcp], lm[pip]);
 }
 
 // Direction of a chain's proximal segment, palm-frame normalized.
@@ -80,9 +100,19 @@ export function extractFeatures(lm) {
   const f = { fingers: {}, pinch: FINGERS.map((fg) => dist(lm[4], lm[FINGER_CHAINS[fg][3]]) / palmW) };
   for (const fg of FINGERS) {
     const ch = FINGER_CHAINS[fg];
-    f.fingers[fg] = { curl: chainCurl(ch, lm), dir: chainDir(ch, lm), tip: pts[ch[3]] };
+    f.fingers[fg] = {
+      curl: chainCurl(ch, lm),
+      mcp: mcpCurl(ch[0], MCP_NEIGHBOR[fg], ch[1], lm),
+      dir: chainDir(ch, lm),
+      tip: pts[ch[3]],
+    };
   }
-  f.thumb = { curl: chainCurl(THUMB_CHAIN, lm), dir: chainDir(THUMB_CHAIN, lm), tip: pts[4] };
+  f.thumb = {
+    curl: chainCurl(THUMB_CHAIN, lm),
+    mcp: mcpCurl(THUMB_CHAIN[0], 5, THUMB_CHAIN[1], lm),
+    dir: chainDir(THUMB_CHAIN, lm),
+    tip: pts[4],
+  };
   f._pts = pts;
   return f;
 }
@@ -90,19 +120,24 @@ export function extractFeatures(lm) {
 // ---- prototype matching ----
 // Feature vector layout (with weights): discriminative emphasis on thumb
 // placement and pinch distances (these separate the fist family M/N/T/S/A and
-// the pinch family F/O/D), curls separate extended vs closed postures.
+// the pinch family F/O/D), curls separate extended vs closed postures. The
+// per-letter prototype sets live in prototypes.js (dataset-derived, whitened);
+// SCALE whitens each dim so the query vector is compared in the same space.
 const CURL_W = 1.2;
+const MCP_W = 1.0;
 const TIP_W = 0.55;
 const THUMB_TIP_W = 1.0;
 const PINCH_W = 0.9;
 
-function featureVector(f) {
+export function featureVector(f) {
   const v = [];
   for (const fg of FINGERS) {
     v.push(f.fingers[fg].curl * CURL_W);
+    v.push(f.fingers[fg].mcp * MCP_W);
     v.push(...f.fingers[fg].tip.map((c) => c * TIP_W));
   }
   v.push(f.thumb.curl * CURL_W);
+  v.push(f.thumb.mcp * MCP_W);
   v.push(...f.thumb.tip.map((c) => c * THUMB_TIP_W));
   for (const p of f.pinch) v.push(p * PINCH_W);
   return v;
@@ -117,11 +152,12 @@ function sqdist(a, b) {
   return s;
 }
 
-// Precompute canonical prototypes once.
-const PROTOTYPES = STATIC_LETTERS.map((L) => {
-  const f = extractFeatures(canonicalLandmarks(L));
-  return { letter: L, vec: featureVector(f) };
-});
+// Whitened query vector — prototypes in prototypes.js are stored pre-whitened.
+function whitenedVector(f) {
+  const v = featureVector(f);
+  for (let i = 0; i < v.length; i++) v[i] /= SCALE[i] || 1;
+  return v;
+}
 
 // Classify: returns { letter, distance, scores: {letter: distance}, features }.
 // distance is a root-mean-square distance in weighted feature space; ~0 means
@@ -129,7 +165,7 @@ const PROTOTYPES = STATIC_LETTERS.map((L) => {
 export function classify(lm) {
   const f = extractFeatures(lm);
   if (!f) return null;
-  const v = featureVector(f);
+  const v = whitenedVector(f);
   const scores = {};
   let best = null;
   for (const p of PROTOTYPES) {
