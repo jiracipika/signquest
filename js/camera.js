@@ -26,6 +26,14 @@ export class HandTracker {
 
   async start(videoEl, overlayCanvas) {
     if (this.running) return;
+    // BUGFIX (2026-10-27): stop() while this boot is still awaiting (model
+    // download, permission prompt) used to be ignored — start() then adopted
+    // a post-stop landmarker, opened the camera anyway and ran a ghost
+    // detection loop on a closed panel, holding the camera light on and
+    // fighting the next session's tracker for the overlay. Same epoch guard
+    // as _restartWithCpu: any await that outlives its epoch releases what it
+    // acquired and abandons the boot.
+    const epoch = this._epoch;
     // 1) + 2) Load tasks-vision and create the landmarker (downloads the model
     // on first use). GPU delegate is faster; fall back to CPU automatically
     // (older Macs, blocked WebGL, VMs).
@@ -34,12 +42,21 @@ export class HandTracker {
     } catch (e) {
       this.landmarker = await this._createLandmarker('CPU');
     }
+    if (epoch !== this._epoch) {
+      try { this.landmarker.close(); } catch {}
+      this.landmarker = null;
+      return;
+    }
 
     // 3) Camera.
     const stream = await navigator.mediaDevices.getUserMedia({
       video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
       audio: false,
     });
+    if (epoch !== this._epoch) {
+      for (const t of stream.getTracks()) t.stop();
+      return;
+    }
     videoEl.srcObject = stream;
     await videoEl.play();
 
